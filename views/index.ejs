@@ -1,0 +1,316 @@
+<html lang="en">
+	<head>
+	    <title>ECHO Mapper: Tracking Environmental Enforcement and Compliance</title>
+	    <meta charset="utf-8">
+	    <script src="/d3-scale/dist/d3-scale.js"></script>
+	    <script src="/d3-format/dist/d3-format.js"></script>
+	    <script src="/d3-array/dist/d3-array.js"></script>
+	    <script src="/d3-color/dist/d3-color.js"></script>
+	    <script src="/jquery/dist/jquery.js"></script>
+	    <script src="/leaflet/dist/leaflet.js"></script>
+	    <link rel="stylesheet" href="/leaflet/dist/leaflet.css" />
+	    <script src="/nprogress/nprogress.js"></script>
+	    <link rel="stylesheet" href="/nprogress/nprogress.css"/>
+	    <script src="/leaflet-draw/dist/leaflet.draw.js"></script>
+	    <link rel="stylesheet" href="/leaflet-draw/dist/leaflet.draw.css"/>
+	    <link rel="stylesheet" href="/bootstrap/dist/css/bootstrap.min.css"/>
+	    <style>
+	    	body {
+	    		margin: 1%;
+	    	}
+		    .loaderImage{
+		      display: none;
+		      position: absolute;
+		      margin: auto;
+		      height: 50px;
+		      width: 50px;
+		      top: 50%;
+		      left: 30%;
+		      z-index: 99999;
+		    }
+		    .legend {
+				width: 150px;
+			    line-height: 18px;
+			    color: #555;
+			}
+			.legend i {
+			    width: 18px;
+			    height: 18px;
+			    float: left;
+			    opacity: 0.8;
+			}
+			.info {
+			    padding: 6px 8px;
+			    font: 14px/16px Arial, Helvetica, sans-serif;
+			    background: rgba(255,255,255,0.8);
+			    box-shadow: 0 0 10px rgba(0,0,0,0.2);
+			    border-radius: 3px;
+			}
+			.info h4 {
+			    margin: 0 0 2px;
+			    color: #777;
+			}
+	  	</style>
+	</head>
+
+  	<body>
+  
+		<div class="loaderImage"> </div>
+
+		<div><h3><em>e</em>nvironmental <em>e</em>nforcement <em>w</em>atch</h3></div>
+
+		<div class="container-fluid">
+		  	<div class="row">
+		    	<div class="col-8" id="map" style="height:100vh">
+		    	</div>
+		    	<div class="col-4" id="data">
+		      		<h4><i>These</i> data:</h4>
+		      		<div id="thesedata"></div><hr>
+		      		<div id="thisdata"></div><hr>
+		      		<div id="context">
+		      			<h4>Contributed context</h4>
+		      			<div id="contributions"></div>
+			      		<form action="/context" method="post" id="usrform">
+							<input type="hidden" name="lat" id="lat" value="">
+							<input type="hidden" name="lon" id="lon" value="">
+							<input type="hidden" name="zoom" id="zoom" value="">
+						  	Name: <input type="text" name="name"> <br>
+						  	<textarea rows="4" cols="50" name="comment">Enter text here...</textarea><br>
+						  	<input type="submit" onsubmit="return false">
+					 	</form>
+					</div>
+		    	</div>
+		  	</div>
+		</div>
+  
+ <!-- <button onclick="post()">Submit</button>  -->
+    
+    <script>
+    NProgress.configure({ parent: '.loaderImage' });
+ 	var format = d3.format(".2n")
+ 	var format_num = d3.format(",d")
+
+	//to start, visualize violations %
+	var stats;
+	var scheme = ['#edf8fb','#b2e2e2','#66c2a4','#2ca25f','#006d2c']
+    var colorize = function(data){
+    	var values = []
+        data.features.forEach(function(d){
+            var pct = (parseFloat(d.properties.f4) / parseFloat(d.properties.f1)) * 100 //f2 - facility count, f5 - violations count
+            values.push(pct)
+        })
+        stats = {"max": d3.max(values), "min": d3.min(values), "med": d3.median(values)} //calculate summary stats across all visible data
+    	color = d3.scaleQuantile().domain(values).range(scheme)
+    	data.features.forEach(function(d){
+    		d.properties.thisColor = color((d.properties.f4 / d.properties.f1) * 100)
+    	})
+    	$("#thesedata").empty()
+    	$("#thesedata").append( 
+    		"<p>Median violation rate: "+format(stats.med)+"%</p>" 
+    	);
+    }
+    var data = <%- JSON.stringify(data) %>
+    colorize(data) //initial run
+
+    //set up map
+    var map =  L.map('map',{ center: [<%= clat %>,<%= clng %>], zoom: <%= zoom %>}); //, maxBoundsViscosity: .4
+    //map.setMaxBounds(map.getBounds())
+    var boundsDelta = map.getBounds()
+    var zoomDelta = <%= zoom %>
+    L.tileLayer('https://stamen-tiles-{s}.a.ssl.fastly.net/toner-lite/{z}/{x}/{y}{r}.png', {
+            attribution: 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a> &mdash; Map data &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+    var layer;
+    var markers;
+
+    var mapmaker = function(data){
+    	layer = L.geoJSON( data, {
+	        style: function (feature) {
+		        return {
+		        	weight: 1, 
+		        	opacity: .75, 
+		        	color: "black", 
+		        	fillColor: feature.properties.thisColor, 
+		        	fillOpacity: .75
+		        };
+		    }
+		}).on('click', function(e){
+	    	//add name! need to rename db columns...
+	    	console.log(e)
+	    	//change layer properties - highlight?
+	    	//e.layer.feature.options.fillOpacity = 1
+	    	$("#thisdata").empty()
+	    	$("#thisdata").append( 
+	    		"<p><h4><i>This</i> data</h4></p><p>Name</p><p>Facilities: "+format_num(e.layer.feature.properties.f1)+"</p><p>Inspections: "+format_num(e.layer.feature.properties.f2)+"</p><p>Enforcement Actions: "+format_num(e.layer.feature.properties.f3)+"</p><p>Violations: "+format_num(e.layer.feature.properties.f4)+"</p>" 
+	    	);
+	    	$("#lat").val(e.latlng.lat) //input.geo? //get center of clik...
+	    	$("#lon").val(e.latlng.lng)
+	    	$("#zoom").val(map.getZoom()) //switch to aggregation level?
+    	}).addTo(map);
+    }
+    mapmaker(data) //initial run
+
+
+	var legend = L.control({position: 'bottomleft'});
+    var legendize = function(){
+    	map.removeControl(legend)
+    	legend = L.control({position: 'bottomleft'});
+    	legend.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'info legend')
+                div.innerHTML =
+                	 '<p><i style="background:' + color.range()[4] + '"></i> ' + format(color.quantiles()[3]) + " - " + format(stats.max) + '% <p>' +
+                	 '<i style="background:' + color.range()[3] + '"></i> ' + format(color.quantiles()[2]) + " - " + format(color.quantiles()[3]) + '% <p>' +
+                	 '<i style="background:' + color.range()[2] + '"></i> ' + format(color.quantiles()[1]) + " - " + format(color.quantiles()[2]) + '% <p>' +
+                	 '<i style="background:' + color.range()[1] + '"></i> ' + format(color.quantiles()[0]) + " - " + format(color.quantiles()[1]) + '% <p>' +
+                	 '<i style="background:' + color.range()[0] + '"></i> ' + format(stats.min) + " - " + format(color.quantiles()[0]) + '%'
+            return div;
+        };
+    	map.addControl(legend)
+    }
+    legendize() //initial run
+
+    /*map.on('dragend', function(e){
+    	map.setMaxBounds(map.getBounds())
+    	var bounds = map.getBounds();
+      	var zoom = map.getZoom();
+      	if (zoom < 8){
+      		var scalar = 15/zoom
+      	} else if (zoom >= 8 & zoom < 10) {
+      		var scalar = 4/zoom
+      	} else if (zoom >= 10){
+      		var scalar = 2/zoom
+      	}
+    	var conditions = Math.abs(bounds._northEast.lng - boundsDelta._northEast.lng) > scalar || Math.abs(bounds._northEast.lat - boundsDelta._northEast.lat) > scalar
+      	zoomDelta = zoom
+      	boundsDelta = bounds
+      	moreDataNeeded = conditions & zoom > 5
+      	if (moreDataNeeded) {
+	        $('.loaderImage').show();
+	        NProgress.start()
+	        $.post('/data', {minLat: bounds._southWest.lat, minLon:bounds._southWest.lng, maxLat:bounds._northEast.lat, maxLon:bounds._northEast.lng, zoom: zoom}, function(resp) {
+	            map.removeLayer(layer);
+	            colorize(resp)
+	            layer = L.geoJSON( resp, {
+	              style: function (feature) {
+	                  return {weight: 1, opacity: .75, color: "black", fillColor: feature.properties.thisColor, fillOpacity: .75};
+	              }}).bindPopup(function (layer) {
+	              	  var percent = parseFloat(layer.feature.properties.f2).toFixed(2);
+	                  return layer.feature.properties.f1 + " " + percent + "%";
+	              })
+	            layer.addTo(map);
+	            legendize()
+	        }).done(function(){NProgress.done();$('.loaderImage').hide();})
+      	}
+    })*/
+    map.on('zoom', function(e){
+    	console.log(map.getZoom())
+    })
+    map.on('zoomend', function(e) {
+
+      	//update contribution form...
+
+      	var bounds = map.getBounds();
+      	var zoom = map.getZoom();
+
+      	var condition0 = zoomDelta > 12 & zoom <= 12 ? true:false //over and went below? // zip
+      	var condition1 = zoomDelta <= 12 & zoom > 12 ? true:false //under and went above? //markers
+      	
+      	var condition2 = zoomDelta > 9 & zoom <= 9 ? true:false //over and went below? // district 
+      	var condition3 = zoomDelta <= 9 & zoom > 9 ? true:false //under and went above? //zip
+      
+      	var condition4 = zoomDelta > 5 & zoom <= 5 ? true:false //over and went below? // state
+      	var condition5 = zoomDelta <= 5 & zoom > 5 ? true:false // under and went above? // district //change to 5???
+
+        var condition6 = zoomDelta > 3 & zoom <= 3 ? true:false // over and went below? //region 	
+      	var condition7 = zoomDelta <= 3 & zoom > 3 ? true:false // under and went above? //state
+
+
+      	var conditions = [condition0, condition1, condition2, condition3, condition4, condition5, condition6, condition7]
+
+      	zoomDelta = zoom
+      	boundsDelta = bounds
+      
+      	moreDataNeeded = conditions.includes(true)
+      
+      	if (moreDataNeeded) {
+	        $('.loaderImage').show();
+	        NProgress.start()
+	        //select where to post based on level? use conditions? 
+	        //get the index/position of the condition...
+	        var geo = {0: "zip", 1: "exporter042020", 2: "district", 3: "zip", 4: "state", 5: "district", 6:"region", 7:"state"}
+	        console.log(geo[conditions.indexOf(true)])
+	        $.post("/map", {minLat: bounds._southWest.lat, minLon:bounds._southWest.lng, maxLat:bounds._northEast.lat, maxLon:bounds._northEast.lng, zoom: zoom, geo:geo[conditions.indexOf(true)]}, function(resp) {
+		            map.removeLayer(layer);
+		            colorize(resp)
+		            mapmaker(resp)
+		            legendize()
+	        }).done(function(){NProgress.done();$('.loaderImage').hide();})
+	       	$.post("/getContext", {minLat: bounds._southWest.lat, minLon:bounds._southWest.lng, maxLat:bounds._northEast.lat, maxLon:bounds._northEast.lng, zoom: zoom}, function(resp) {
+	       			contextr(resp)
+	        })
+	        //also post contributions....
+      	}
+    });
+
+    var contextr = function(data){
+    	console.log(data)
+    	if (data.features != null){
+	    	$("#contributions").empty()
+	    	for (c in data.features){
+	    		console.log(data.features[c])
+	    		$("#contributions").append( 
+	    			"<p>Name: "+data.features[c].properties.f1+"</p><br>Note: "+data.features[c].properties.f2+"<hr>" 
+	    		);
+	    	}
+	    	markers = L.geoJSON( data, {
+		        style: function (feature) {
+			        return {
+			        };
+			    }
+			}).addTo(map)
+    	} else {
+    		map.removeLayer(markers);
+    		$("#contributions").empty()
+    	}
+    }
+    // https://jsfiddle.net/user2314737/324h2d9q/
+    // Initialise the FeatureGroup to store editable layers
+	var editableLayers = new L.FeatureGroup();
+	map.addLayer(editableLayers);
+
+	var drawPluginOptions = {
+	  position: 'topright',
+	  draw: {
+	    polygon: false,
+	    polyline: false,
+	    circle: false,
+	    rectangle: false,
+	    marker: true,
+	    },
+	  edit: {
+	    featureGroup: editableLayers, //REQUIRED!!
+	    edit: false,
+	    remove: true
+	  }
+	};
+
+	// Initialise the draw control and pass it the FeatureGroup of editable layers
+	var drawControl = new L.Control.Draw(drawPluginOptions);
+	map.addControl(drawControl);
+
+	map.on('draw:created', function(e) {
+	  var type = e.layerType,
+	    layer = e.layer;
+	  editableLayers.addLayer(layer);
+	});
+
+	function post(){
+		var shapes = editableLayers.toGeoJSON()
+		$.post('/send', {shape: shapes}, function(resp) { //need to add comment field!
+            console.log("sent")
+      	})
+	}
+
+		  
+  </script>
+</body>
+</html>
